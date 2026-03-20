@@ -1,0 +1,27 @@
+{
+  "name": "agent03-campaign-localizer",
+  "version": "1.0.0",
+  "description": "Multilingual Campaign Localizer — EN to DE + AR with GDPR compliance scanning",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "nodemon backend/server.js",
+    "test": "node backend/test/test-api.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "axios": "^1.7.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^4.19.0",
+    "express-rate-limit": "^7.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Agent 03 — Crest Campaign Team",
+  "license": "MIT"
+}
