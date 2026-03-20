@@ -1,0 +1,297 @@
+# AGENT 03 — VPS Deployment Guide
+# Multilingual Campaign Localizer: EN → DE + AR with GDPR Checks
+# ================================================================
+# Written for: Ubuntu 22.04 / 24.04 VPS (DigitalOcean, Hetzner, AWS EC2, etc.)
+# Time to complete: ~30 minutes
+# Prerequisites: A VPS with SSH access + a domain (optional but recommended)
+# ================================================================
+
+
+# ════════════════════════════════════════════════════════════════
+# PHASE 1 — GET YOUR API KEYS (do this first, before touching the VPS)
+# ════════════════════════════════════════════════════════════════
+
+## A. DeepL API Key (for translation)
+## ------------------------------------
+## 1. Go to: https://www.deepl.com/account/summary
+## 2. Create a free account (no credit card needed for free tier)
+## 3. Under "Authentication Key for DeepL API" — copy the key
+## 4. Free tier gives you: 500,000 characters/month
+## 5. Note: Free tier uses api-free.deepl.com — NOT api.deepl.com
+##    If you upgrade to Pro later, change DEEPL_ENDPOINT in your .env
+
+## B. Anthropic (Claude) API Key (for adaptation + GDPR scan)
+## -----------------------------------------------------------
+## 1. Go to: https://console.anthropic.com/settings/keys
+## 2. Create an account and add billing (pay as you go)
+## 3. Click "Create Key" — copy it immediately (shown only once)
+## 4. Cost estimate: ~$0.003 per 1000 tokens
+##    A typical localisation uses ~500 tokens = ~$0.001 per run
+##    Realistic monthly cost for 1000 campaigns: ~$3-5
+
+
+# ════════════════════════════════════════════════════════════════
+# PHASE 2 — VPS INITIAL SETUP
+# ════════════════════════════════════════════════════════════════
+
+## Step 1: SSH into your VPS
+## --------------------------
+ssh root@YOUR_VPS_IP
+## Replace YOUR_VPS_IP with your actual server IP address
+
+## Step 2: Update system packages
+## --------------------------------
+apt update && apt upgrade -y
+
+## Step 3: Install Node.js 20 (LTS)
+## ----------------------------------
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+node --version   # Should show v20.x.x
+npm --version    # Should show 10.x.x
+
+## Step 4: Install PM2 (process manager — keeps your app running 24/7)
+## ---------------------------------------------------------------------
+npm install -g pm2
+
+## Step 5: Install Nginx (reverse proxy — routes port 80/443 to your app)
+## -----------------------------------------------------------------------
+apt install -y nginx
+systemctl start nginx
+systemctl enable nginx
+
+## Step 6: Install Certbot (for HTTPS/SSL — strongly recommended)
+## ---------------------------------------------------------------
+apt install -y certbot python3-certbot-nginx
+
+
+# ════════════════════════════════════════════════════════════════
+# PHASE 3 — UPLOAD AND CONFIGURE THE APP
+# ════════════════════════════════════════════════════════════════
+
+## Step 7: Create app directory
+## ------------------------------
+mkdir -p /var/www/agent03
+cd /var/www/agent03
+
+## Step 8: Upload the project files from your local machine
+## ---------------------------------------------------------
+## Run this from your LOCAL machine (not the VPS):
+##
+##   scp -r ./agent03-campaign-localizer/* root@YOUR_VPS_IP:/var/www/agent03/
+##
+## OR if you're using Git:
+##   git init
+##   git remote add origin https://github.com/YOUR_USERNAME/agent03.git
+##   git pull origin main
+
+## Step 9: Install Node dependencies (on VPS, inside /var/www/agent03)
+## --------------------------------------------------------------------
+cd /var/www/agent03
+npm install --production
+## This installs: express, axios, @anthropic-ai/sdk, cors, dotenv, express-rate-limit
+
+## Step 10: Create your .env file with real API keys
+## --------------------------------------------------
+cp .env.example .env
+nano .env
+
+## Inside nano, fill in these values:
+## ┌────────────────────────────────────────────────────────────┐
+## │  DEEPL_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx    │
+## │  DEEPL_ENDPOINT=https://api-free.deepl.com/v2/translate   │
+## │  ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxxxxxxxxxx      │
+## │  PORT=3000                                                 │
+## └────────────────────────────────────────────────────────────┘
+##
+## Save with: Ctrl+O → Enter → Ctrl+X
+
+## Step 11: Verify your .env is correct
+## --------------------------------------
+cat .env
+## You should see your real keys (not placeholder values)
+
+## Step 12: Load the .env into server.js
+## ----------------------------------------
+## Open backend/server.js and add this as the VERY FIRST LINE:
+nano backend/server.js
+## Add at the top (before any other require statements):
+##   require('./config/env');
+## Save: Ctrl+O → Enter → Ctrl+X
+
+
+# ════════════════════════════════════════════════════════════════
+# PHASE 4 — START THE APP WITH PM2
+# ════════════════════════════════════════════════════════════════
+
+## Step 13: Start the app
+## -----------------------
+cd /var/www/agent03
+pm2 start backend/server.js --name "agent03"
+
+## Step 14: Verify it's running
+## ------------------------------
+pm2 status
+## You should see: agent03 | online
+
+pm2 logs agent03 --lines 20
+## You should see: "🚀 AGENT 03 Campaign Localizer running on port 3000"
+
+## Step 15: Test the health endpoint
+## -----------------------------------
+curl http://localhost:3000/api/health
+## Expected: {"status":"ok","agent":"AGENT 03","version":"1.0.0",...}
+
+## Step 16: Make PM2 auto-restart on reboot
+## -----------------------------------------
+pm2 startup systemd
+## PM2 will print a command — copy and run it. It looks like:
+##   sudo env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u root --hp /root
+pm2 save
+
+
+# ════════════════════════════════════════════════════════════════
+# PHASE 5 — CONFIGURE NGINX REVERSE PROXY
+# ════════════════════════════════════════════════════════════════
+
+## Step 17: Create Nginx config for your domain
+## ---------------------------------------------
+nano /etc/nginx/sites-available/agent03
+
+## Paste this configuration (replace yourdomain.com with your actual domain):
+## ────────────────────────────────────────────────────────────────────────────
+## server {
+##     listen 80;
+##     server_name yourdomain.com www.yourdomain.com;
+##
+##     # Security headers (GDPR-friendly)
+##     add_header X-Frame-Options "SAMEORIGIN";
+##     add_header X-XSS-Protection "1; mode=block";
+##     add_header X-Content-Type-Options "nosniff";
+##     add_header Referrer-Policy "no-referrer-when-downgrade";
+##
+##     location / {
+##         proxy_pass http://localhost:3000;
+##         proxy_http_version 1.1;
+##         proxy_set_header Upgrade $http_upgrade;
+##         proxy_set_header Connection 'upgrade';
+##         proxy_set_header Host $host;
+##         proxy_set_header X-Real-IP $remote_addr;
+##         proxy_cache_bypass $http_upgrade;
+##         proxy_read_timeout 60s;
+##     }
+## }
+## ────────────────────────────────────────────────────────────────────────────
+## Save: Ctrl+O → Enter → Ctrl+X
+
+## Step 18: Enable the site
+## -------------------------
+ln -s /etc/nginx/sites-available/agent03 /etc/nginx/sites-enabled/
+nginx -t
+## Should say: configuration file /etc/nginx/nginx.conf test is successful
+systemctl reload nginx
+
+## Step 19: Point your domain DNS to the VPS
+## -------------------------------------------
+## In your domain registrar (GoDaddy, Cloudflare, Namecheap etc.):
+##   Add an A record:  @ → YOUR_VPS_IP
+##   Add a CNAME:      www → yourdomain.com
+## DNS propagation takes 5–30 minutes.
+
+
+# ════════════════════════════════════════════════════════════════
+# PHASE 6 — HTTPS WITH SSL (Strongly Recommended)
+# ════════════════════════════════════════════════════════════════
+
+## Step 20: Get a free SSL certificate via Let's Encrypt
+## -------------------------------------------------------
+certbot --nginx -d yourdomain.com -d www.yourdomain.com
+## Follow prompts: enter your email, agree to terms
+## Certbot will automatically update your Nginx config for HTTPS
+
+## Step 21: Verify auto-renewal works
+## ------------------------------------
+certbot renew --dry-run
+## Should say: "Congratulations, all simulated renewals succeeded"
+
+## Your app is now live at: https://yourdomain.com 🎉
+
+
+# ════════════════════════════════════════════════════════════════
+# PHASE 7 — TEST YOUR LIVE DEPLOYMENT
+# ════════════════════════════════════════════════════════════════
+
+## Step 22: Run the smoke test
+## ----------------------------
+## From your local machine:
+node backend/test/test-api.js
+## Or from the VPS (update BASE_URL in test-api.js to your domain):
+## PORT=3000 node /var/www/agent03/backend/test/test-api.js
+
+## Step 23: Test via browser
+## --------------------------
+## Open: https://yourdomain.com
+## You should see the Campaign Localizer UI
+## Try submitting a test campaign — results should appear in ~60 seconds
+
+
+# ════════════════════════════════════════════════════════════════
+# PHASE 8 — MAINTENANCE COMMANDS (bookmark these)
+# ════════════════════════════════════════════════════════════════
+
+## View live logs
+pm2 logs agent03
+
+## Restart after code changes
+pm2 restart agent03
+
+## Stop the app
+pm2 stop agent03
+
+## Check app status
+pm2 status
+
+## View Nginx logs (if something's wrong at the proxy level)
+tail -f /var/log/nginx/error.log
+
+## Update API keys (edit .env then restart)
+nano /var/www/agent03/.env
+pm2 restart agent03
+
+## Monitor API costs
+## DeepL:      https://www.deepl.com/account/usage
+## Anthropic:  https://console.anthropic.com/settings/billing
+
+
+# ════════════════════════════════════════════════════════════════
+# COST SUMMARY (Monthly estimate for 500 campaigns/month)
+# ════════════════════════════════════════════════════════════════
+#
+#  DeepL Free tier:       $0.00  (500k chars free — ~800 campaigns)
+#  Claude API:            ~$5.00 (500 campaigns × $0.01 each)
+#  VPS (Hetzner CX11):    ~$4.00 (cheapest option, works fine)
+#  Domain + SSL:          Free (Let's Encrypt SSL, domain ~$10/year)
+#
+#  TOTAL (500 campaigns): ~$9–15/month
+#  Per-campaign cost:     ~$0.02
+#
+# ════════════════════════════════════════════════════════════════
+# RESUME BULLET (copy exactly):
+# ════════════════════════════════════════════════════════════════
+#
+# "Built a DeepL API + Claude API campaign localizer that translates
+#  and culturally adapts English ad copy into German and Arabic with
+#  automated GDPR phrasing checks — cutting localisation time from
+#  hours to minutes."
+#
+# ════════════════════════════════════════════════════════════════
+# SUPPORT
+# ════════════════════════════════════════════════════════════════
+#
+#  DeepL API docs:     https://www.deepl.com/docs-api
+#  Anthropic API docs: https://docs.anthropic.com/en/api/getting-started
+#  PM2 docs:           https://pm2.keymetrics.io/docs/usage/quick-start/
+#  Nginx docs:         https://nginx.org/en/docs/
+#  Let's Encrypt:      https://letsencrypt.org/getting-started/
+#
+# ════════════════════════════════════════════════════════════════
